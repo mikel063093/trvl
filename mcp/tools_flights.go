@@ -59,6 +59,8 @@ func searchFlightsTool() ToolDef {
 				"first_result":        {Type: "boolean", Description: "Return only the first result with a valid price after sorting. Combine with sort_by to get e.g. the shortest priced flight (duration) or cheapest. Default: false."},
 				"airline":             {Type: "array", Items: &Property{Type: "string"}, Description: "Restrict results to these airline IATA codes (e.g. AY, AF, KL). Accepts a JSON array or a comma-separated string. Empty = no filter. Mirrors the CLI --airline flag: the codes are passed to the provider and the results are also narrowed post-search to flights with at least one matching leg."},
 				"provider":            {Type: "string", Description: "Flight provider: empty (default) = Google Flights + Kiwi + Skiplagged merge, 'skiplagged' = Skiplagged MCP only (hidden-city + virtual-interlining defaults), 'afklm' (aliases: af-klm, airfranceklm) = Air France-KLM Offers API only (opt-in, native round-trip fares; requires a credential). Use a solo provider when you want to cross-validate candidates."},
+				"sources":             {Type: "array", Items: &Property{Type: "string"}, Description: "Limit the providers this search queries to these ids (comma-separated string or JSON array): google_flights, kiwi, skiplagged, ryanair, wizzair, transavia, easyjet, vueling, norwegian, afklm. Empty = every provider (default). Google Flights is always queried: its answer fixes the pricing currency. Each provider left out costs no request."},
+				"lean":                {Type: "boolean", Description: "Price discovery only (default: false). Queries just Google Flights and Kiwi unless sources is given, skips the savings/hacks engine, the split-ticket composition of round trips and the destination intelligence. Use it when the caller shares an IP with other clients of the same providers or only needs fares: a default search also queries Skiplagged, the European low-cost carriers and ground transport, and fans out extra searches."},
 				"seat_preference":     {Type: "string", Description: "Seat to write onto an existing booking URL: window or aisle. Applied only when the host is kiwi.com (query seat) or klm.com (query seatPreference). An empty URL, and every other host, stays unchanged."},
 			},
 			Required: []string{"destination", "departure_date"},
@@ -147,6 +149,19 @@ func handleSearchFlights(ctx context.Context, args map[string]any, elicit Elicit
 		RequireCheckedBag: argBool(args, "require_checked_bag", false),
 		FirstResult:       argBool(args, "first_result", false),
 		Currency:          argString(args, "currency"),
+	}
+
+	// lean is price discovery only: fewer providers, no savings pass, no composed
+	// split-ticket fares and no destination intelligence. An explicit `sources`
+	// still decides which providers are queried.
+	lean := argBool(args, "lean", false)
+	opts.Sources = flights.NormalizeSources(argStringSlice(args, "sources"))
+	if lean {
+		if len(opts.Sources) == 0 {
+			opts.Sources = flights.NormalizeSources([]string{flights.SourceGoogleFlights, flights.SourceKiwi})
+		}
+		opts.NoHacks = true
+		opts.NoComposedFares = true
 	}
 
 	if cc := argString(args, "cabin_class"); cc != "" {
@@ -465,7 +480,9 @@ func handleSearchFlights(ctx context.Context, args map[string]any, elicit Elicit
 	// search path: weather, safety, holidays, currency, country facts inline,
 	// with no extra switch. Geocodes the user-supplied destination (city name or
 	// airport code). Silent degrade — never blocks the search.
-	resp.Destination = enrichDestination(ctx, argString(args, "destination"), models.DateRange{CheckIn: date, CheckOut: opts.ReturnDate})
+	if !lean {
+		resp.Destination = enrichDestination(ctx, argString(args, "destination"), models.DateRange{CheckIn: date, CheckOut: opts.ReturnDate})
+	}
 	if seat := strings.TrimSpace(argString(args, "seat_preference")); seat != "" {
 		for i := range enrichedFlights {
 			enrichedFlights[i].BookingURL = seaturl.Apply(enrichedFlights[i].BookingURL, seat)

@@ -79,7 +79,14 @@ func searchRoundTripComposed(ctx context.Context, client *batchexec.Client, orig
 	googleRT, googleStatuses := searchGoogleNativeRoundTrip(ctx, client, origin, destination, date, returnDate, opts, nativeRoundTripCurrency(opts, nil, nil))
 	statuses = append(statuses, googleStatuses...)
 
-	outbound, outErr := SearchFlightsWithClient(legCtx, client, origin, destination, date, legOpts)
+	// The outbound one-way search only feeds the composed (split-ticket) pairs. A
+	// caller that drops them (NoComposedFares) skips it; the inbound one-way
+	// search still runs because it gives the native fares their return leg.
+	var outbound *models.FlightSearchResult
+	var outErr error
+	if !opts.NoComposedFares {
+		outbound, outErr = SearchFlightsWithClient(legCtx, client, origin, destination, date, legOpts)
+	}
 	inbound, inErr := SearchFlightsWithClient(legCtx, client, destination, origin, returnDate, legOpts)
 
 	var outFlights, inFlights []models.FlightResult
@@ -160,7 +167,9 @@ func searchRoundTripComposed(ctx context.Context, client *batchexec.Client, orig
 	}
 
 	upstreamAnswered := models.ComputeCompleteness(statuses).Succeeded > 0
-	statuses = append(statuses, roundTripComposerStatus(len(outFlights), len(inFlights), len(composed), truncated, upstreamAnswered))
+	if !opts.NoComposedFares {
+		statuses = append(statuses, roundTripComposerStatus(len(outFlights), len(inFlights), len(composed), truncated, upstreamAnswered))
+	}
 
 	// If neither leg produced any priced option, surface the underlying errors
 	// rather than an empty "success".

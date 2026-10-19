@@ -26,17 +26,12 @@ func TestAdvancedProbe(t *testing.T) {
 	client.SetNoCache(true)
 	client.SetRateLimit(0.5)
 
-	// Shared across both subtests: once Google throttles this runner, the
-	// client cools down for ~15 minutes, so the remaining subtests skip
-	// instead of piling more requests onto a refused IP (trvl#720).
-	throttle := &probeThrottle{}
-
 	t.Run("CheckedBagsBudgetRoute", func(t *testing.T) {
-		testCheckedBagsBudgetRoute(t, client, throttle)
+		testCheckedBagsBudgetRoute(t, client)
 	})
 
 	t.Run("AllianceVariants", func(t *testing.T) {
-		testAllianceVariants(t, client, throttle)
+		testAllianceVariants(t, client)
 	})
 }
 
@@ -53,15 +48,26 @@ func TestAdvancedProbe(t *testing.T) {
 //
 // If any variant returns fewer flights than baseline, checked bags filtering
 // WORKS on budget routes.
-func testCheckedBagsBudgetRoute(t *testing.T, client *batchexec.Client, throttle *probeThrottle) {
+func testCheckedBagsBudgetRoute(t *testing.T, client *batchexec.Client) {
 	searchDate := time.Now().AddDate(0, 0, 21).Format("2006-01-02")
 	t.Logf("Route: HEL -> STN, date: %s", searchDate)
 
 	baseOpts := SearchOptions{Adults: 1}
 	baseOpts.defaults()
 
-	// Baseline sanity check (one jittered retry on throttling).
-	throttle.probeBaseline(t, client, "HEL", "STN", searchDate, baseOpts)
+	// Baseline sanity check.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, err := SearchFlightsWithClient(ctx, client, "HEL", "STN", searchDate, baseOpts)
+		if err != nil {
+			t.Fatalf("baseline search failed: %v", err)
+		}
+		t.Logf("Baseline (SearchFlightsWithClient): %d flights", res.Count)
+		if res.Count == 0 {
+			t.Fatal("baseline returned 0 flights -- route/date unusable")
+		}
+	}
 
 	probes := []filterProbe{
 		{name: "[0,0]_baseline", value: []any{0, 0}, expectOK: true},
@@ -75,7 +81,6 @@ func testCheckedBagsBudgetRoute(t *testing.T, client *batchexec.Client, throttle
 
 	for i, p := range probes {
 		t.Run(p.name, func(t *testing.T) {
-			throttle.skipIfThrottled(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
@@ -88,7 +93,6 @@ func testCheckedBagsBudgetRoute(t *testing.T, client *batchexec.Client, throttle
 			}
 
 			status, body, err := client.SearchFlights(ctx, encoded)
-			throttle.check(t, err)
 			if err != nil {
 				t.Logf("FAILED %s: %v", p.name, err)
 				results[i] = probeResult{name: p.name, err: err}
@@ -171,15 +175,26 @@ func testCheckedBagsBudgetRoute(t *testing.T, client *batchexec.Client, throttle
 // testAllianceVariants verifies ONEWORLD and SKYTEAM at segment[5], and tests
 // multi-alliance combo. STAR_ALLIANCE was confirmed working (45/115 flights on
 // HEL->LHR = 61% reduction).
-func testAllianceVariants(t *testing.T, client *batchexec.Client, throttle *probeThrottle) {
+func testAllianceVariants(t *testing.T, client *batchexec.Client) {
 	searchDate := time.Now().AddDate(0, 0, 21).Format("2006-01-02")
 	t.Logf("Route: HEL -> LHR, date: %s", searchDate)
 
 	baseOpts := SearchOptions{Adults: 1}
 	baseOpts.defaults()
 
-	// Baseline sanity check (one jittered retry on throttling).
-	throttle.probeBaseline(t, client, "HEL", "LHR", searchDate, baseOpts)
+	// Baseline sanity check.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		res, err := SearchFlightsWithClient(ctx, client, "HEL", "LHR", searchDate, baseOpts)
+		if err != nil {
+			t.Fatalf("baseline search failed: %v", err)
+		}
+		t.Logf("Baseline (SearchFlightsWithClient): %d flights", res.Count)
+		if res.Count == 0 {
+			t.Fatal("baseline returned 0 flights -- route/date unusable")
+		}
+	}
 
 	probes := []filterProbe{
 		{name: "nil_baseline", value: nil, expectOK: true},
@@ -193,7 +208,6 @@ func testAllianceVariants(t *testing.T, client *batchexec.Client, throttle *prob
 
 	for i, p := range probes {
 		t.Run(p.name, func(t *testing.T) {
-			throttle.skipIfThrottled(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
@@ -206,7 +220,6 @@ func testAllianceVariants(t *testing.T, client *batchexec.Client, throttle *prob
 			}
 
 			status, body, err := client.SearchFlights(ctx, encoded)
-			throttle.check(t, err)
 			if err != nil {
 				t.Logf("FAILED %s: %v", p.name, err)
 				results[i] = probeResult{name: p.name, err: err}

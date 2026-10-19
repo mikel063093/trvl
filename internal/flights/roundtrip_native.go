@@ -24,7 +24,7 @@ import (
 // A disabled or ineligible provider yields no results and no status, leaving the
 // composition-only behaviour byte-unchanged.
 func searchNativeRoundTrip(ctx context.Context, client *batchexec.Client, origin, destination, date, returnDate string, opts SearchOptions, target string) ([]models.FlightResult, []models.ProviderStatus) {
-	if !skiplaggedSearchEligible(client, opts) {
+	if !opts.sourceAllowed(SourceSkiplagged) || !skiplaggedSearchEligible(client, opts) {
 		return nil, nil
 	}
 
@@ -217,8 +217,8 @@ func searchKiwiNativeRoundTrip(ctx context.Context, client *batchexec.Client, or
 	// genuine filter limits and the shared-client guard, but allow round-trips.
 	probe := opts
 	probe.ReturnDate = ""
-	if !kiwiSearchEligible(client, probe) {
-		return nil, nil // unsupported filters / non-shared client — composition covers it
+	if !opts.sourceAllowed(SourceKiwi) || !kiwiSearchEligible(client, probe) {
+		return nil, nil // not requested / unsupported filters / non-shared client — composition covers it
 	}
 
 	rtOpts := opts
@@ -273,7 +273,7 @@ func searchAFKLMNativeRoundTrip(ctx context.Context, origin, destination, date, 
 
 	// Fanout suppression (set by SearchMultiAirport on sub-searches): skip AFKLM
 	// so its 1-QPS/100-req-day quota is spent at most once per logical search.
-	if opts.suppressAFKLM {
+	if opts.suppressAFKLM || !opts.sourceAllowed(SourceAFKLM) {
 		return nil, nil
 	}
 

@@ -74,6 +74,21 @@ type SearchOptions struct {
 	RequireCheckedBag bool // Only show flights with ≥1 free checked bag
 	FirstResult       bool // Return only the first flight with Price > 0 after sorting
 
+	// Sources limits the secondary providers a search queries to these ids (see
+	// the Source* constants; use NormalizeSources). Empty means every provider,
+	// the default. Google Flights is always queried: its answer fixes the
+	// currency the others are priced in. Each provider left out costs no
+	// request, which matters to a caller that shares an IP with other clients of
+	// the same providers.
+	Sources []string
+
+	// NoComposedFares skips the outbound one-way search and the pairing of two
+	// one-way tickets into a round trip (the split-ticket fares). Native
+	// round-trip fares are still searched, and the inbound one-way search still
+	// runs because it gives those fares their return leg. A caller that drops
+	// composed fares saves a third of the round-trip requests.
+	NoComposedFares bool
+
 	// NoHacks opts out of the auto-composed travel-hacks savings engine. The
 	// engine is ON by default: a normal search also surfaces the single best
 	// cheaper synthesized option (hidden-city, positioning, split, multimodal,
@@ -165,7 +180,7 @@ func SearchFlights(ctx context.Context, origin, destination, date string, opts S
 // AFKLM-suppressed and an AFKLM-included request cannot collide on one cache
 // entry and serve each other's results.
 func flightSearchKey(origin, destination, date string, opts SearchOptions) string {
-	return fmt.Sprintf("flight|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%v|%v|%v|%s|%s|%s|%v",
+	return fmt.Sprintf("flight|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%v|%v|%v|%s|%s|%s|%v|%s|%v|%v",
 		origin, destination, date, opts.ReturnDate,
 		opts.CabinClass, opts.MaxStops, opts.SortBy, opts.Adults,
 		opts.MaxPrice, opts.MaxDuration, opts.CarryOnBags, opts.CheckedBags,
@@ -173,6 +188,9 @@ func flightSearchKey(origin, destination, date string, opts SearchOptions) strin
 		opts.ExcludeBasic, opts.LessEmissions, opts.RequireCheckedBag,
 		canonicalStringSlice(opts.Alliances), opts.DepartAfter, opts.DepartBefore,
 		opts.suppressAFKLM,
+		// A search with other sources, or with the savings pass or composed fares
+		// left out, returns different flights: it must not share a cache entry.
+		canonicalStringSlice(opts.Sources), opts.NoComposedFares, opts.NoHacks,
 	)
 }
 
