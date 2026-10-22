@@ -68,7 +68,7 @@ func TestRefusalWaitHugeHintIsCappedNotWrapped(t *testing.T) {
 	}
 }
 
-func TestRestoredDeadlineIsBoundedByTheCap(t *testing.T) {
+func TestRestoredDeadlineIsPreserved(t *testing.T) {
 	dir := t.TempDir()
 	far := time.Now().Add(5 * time.Hour)
 	if err := os.WriteFile(filepath.Join(dir, googleRefusalFilename), []byte(far.Format(time.RFC3339Nano)), 0o600); err != nil {
@@ -79,12 +79,11 @@ func TestRestoredDeadlineIsBoundedByTheCap(t *testing.T) {
 	if _, _, err := c.PostForm(context.Background(), FlightsURL, "f.req=x"); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a stored future deadline must still refuse, got %v", err)
 	}
-	limit := time.Now().Add(googleRefusalCap + time.Second)
-	if c.refuseUntil.After(limit) {
-		t.Fatalf("restored deadline %s is beyond the %s cap", time.Until(c.refuseUntil).Round(time.Second), googleRefusalCap)
+	if !c.refuseUntil.Equal(far) {
+		t.Fatalf("restored deadline changed: %v, want %v", c.refuseUntil, far)
 	}
-	if disk := readRefusalDeadline(t, dir); disk.After(limit) {
-		t.Fatalf("stored deadline must be rewritten within the cap, still %s ahead", time.Until(disk).Round(time.Second))
+	if disk := readRefusalDeadline(t, dir); !disk.Equal(far) {
+		t.Fatalf("stored deadline changed: %v, want %v", disk, far)
 	}
 }
 

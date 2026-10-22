@@ -526,7 +526,14 @@ func enrichNativeReturnLegs(native, inbound []models.FlightResult, n int) ([]mod
 		// (AFKLM always returns both legs for round-trips.)
 		isNativeOutboundShell := false
 		for _, w := range f.Warnings {
-			if w == googleNativeRoundTripWarning || w == kiwiNativeRoundTripWarning {
+			// An independently searched one-way cannot establish which return is
+			// included in a Google native total. Page searches now pin the
+			// outbound and fetch the actual paired return quote instead.
+			if w == googleNativeRoundTripWarning {
+				isNativeOutboundShell = false
+				break
+			}
+			if w == kiwiNativeRoundTripWarning {
 				isNativeOutboundShell = true
 				break
 			}
@@ -586,7 +593,7 @@ func attachReturnLeg(f, ret models.FlightResult) models.FlightResult {
 	warnings = append(warnings, warn)
 	for _, w := range f.Warnings {
 		// A real return is now shown, so the booking-time-only note is misleading.
-		if w == googleNativeRoundTripWarning || w == kiwiNativeRoundTripWarning {
+		if w == kiwiNativeRoundTripWarning {
 			continue
 		}
 		warnings = append(warnings, w)

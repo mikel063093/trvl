@@ -27,9 +27,9 @@ const (
 	// stop adding requests, and short enough that a later search can try again.
 	googleRefusalLong = 15 * time.Minute
 
-	// googleRefusalCap stops a hostile or broken Retry-After from sticking
-	// for days. The same bound applies to retryAfterSeconds.
-	googleRefusalCap = 15 * time.Minute
+	// Never shorten a provider's Retry-After. Saturate only at the largest
+	// representable duration so an overflowing hint cannot wrap to a short wait.
+	googleRefusalCap = time.Duration(1<<63 - 1)
 
 	googleRefusalFilename = "google-refusal"
 )
@@ -315,8 +315,10 @@ func shouldStopGoogle(status int, body []byte) bool {
 	switch status {
 	case http.StatusTooManyRequests:
 		return true
+	case http.StatusForbidden:
+		return true
 	case http.StatusOK:
-		return QuotaRefusal(status, body)
+		return QuotaRefusal(status, body) || PageRefusal(body)
 	default:
 		return false
 	}

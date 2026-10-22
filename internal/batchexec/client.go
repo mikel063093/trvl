@@ -63,10 +63,11 @@ const (
 // for server errors, and an in-memory response cache. A Google quota refusal
 // stops later Google calls until a cooldown instead of retrying them.
 type Client struct {
-	http    *http.Client
-	limiter *rate.Limiter
-	cache   *cache.Cache
-	noCache bool
+	http     *http.Client
+	pageHTTP *http.Client
+	limiter  *rate.Limiter
+	cache    *cache.Cache
+	noCache  bool
 
 	// googleMu is held across a Google dial so a concurrent caller observes a
 	// refusal written by the request it was waiting behind. refuseUntil is the
@@ -120,6 +121,7 @@ func NewClient() *Client {
 		ForceAttemptHTTP2: false,
 	}
 	return &Client{
+		pageHTTP: &http.Client{Timeout: 20 * time.Second},
 		http: &http.Client{
 			Transport: transport,
 			Timeout:   20 * time.Second,

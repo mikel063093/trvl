@@ -44,6 +44,7 @@ func NewTestClient(baseURL string) *Client {
 	// refusalDir stays empty on purpose. Empty means memory-only, so a test
 	// response that looks like a Google refusal cannot arm ~/.trvl/cache.
 	return &Client{
+		pageHTTP: &http.Client{Transport: &testRedirectTransport{baseURL: baseURL}, Timeout: 5 * time.Second},
 		http: &http.Client{
 			Transport: &testRedirectTransport{baseURL: baseURL},
 			Timeout:   5 * time.Second,

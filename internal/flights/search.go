@@ -38,12 +38,15 @@ func DefaultClient() *batchexec.Client {
 
 // SearchOptions configures a flight search.
 type SearchOptions struct {
-	ReturnDate string            // Return date for round-trip (YYYY-MM-DD); empty = one-way
-	CabinClass models.CabinClass // Cabin class (default: Economy)
-	MaxStops   models.MaxStops   // Maximum stops filter
-	SortBy     models.SortBy     // Result sort order
-	Airlines   []string          // Restrict to these airline IATA codes
-	Adults     int               // Number of adult passengers (default: 1)
+	// pageOutbound pins a real outbound on the Google search page so its next
+	// board prices matching returns. Internal to the native round-trip lookup.
+	pageOutbound []models.FlightLeg
+	ReturnDate   string            // Return date for round-trip (YYYY-MM-DD); empty = one-way
+	CabinClass   models.CabinClass // Cabin class (default: Economy)
+	MaxStops     models.MaxStops   // Maximum stops filter
+	SortBy       models.SortBy     // Result sort order
+	Airlines     []string          // Restrict to these airline IATA codes
+	Adults       int               // Number of adult passengers (default: 1)
 
 	// DepartureFlexDays / ReturnFlexDays enable Kiwi's flexible-date search
 	// (cheapest within +/- N days). Range 0-3; values are clamped. 0 = exact.
@@ -731,9 +734,7 @@ func googleUpstreamStatusError(status int) error {
 }
 
 func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client, origin, destination, date string, opts SearchOptions) (*models.FlightSearchResult, error) {
-	filters := buildFilters(origin, destination, date, opts)
-
-	encoded, err := batchexec.EncodeFlightFilters(filters)
+	encoded, err := flightPageToken(origin, destination, date, opts)
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("encode filters: %v", err),
@@ -741,7 +742,7 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	gl := CurrencyToGL(opts.Currency)
-	status, body, err := client.SearchFlightsGLStealth(ctx, encoded, gl, opts.Stealth)
+	status, body, err := client.SearchFlightsPage(ctx, encoded, gl, opts.Currency)
 	if err != nil {
 		reqErr := googleRequestError(err)
 		return &models.FlightSearchResult{Error: reqErr.Error()}, reqErr
@@ -761,7 +762,17 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 		}, fmt.Errorf("unexpected status %d", status)
 	}
 
-	inner, err := batchexec.DecodeFlightResponse(body)
+	if batchexec.PageRefusal(body) {
+		rlErr := googleNonFlightError(body)
+		return &models.FlightSearchResult{Error: rlErr.Error()}, rlErr
+	}
+	// JSON refusals remain classified precisely; successful searches arrive as HTML.
+	var inner any
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") {
+		inner, err = decodeFlightPage(body)
+	} else {
+		inner, err = batchexec.DecodeFlightResponse(body)
+	}
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("decode response: %v", err),
@@ -784,6 +795,9 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	rawFlights, err := batchexec.ExtractFlightData(inner)
+	if err != nil && strings.HasPrefix(strings.TrimSpace(string(body)), "<") && emptyFlightPage(inner) {
+		err = nil
+	}
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("extract flights: %v", err),
@@ -791,6 +805,15 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	flights := parseFlights(rawFlights)
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") {
+		rowOrigin, rowDestination, rowDate := origin, destination, date
+		if len(opts.pageOutbound) > 0 {
+			rowOrigin, rowDestination, rowDate = destination, origin, opts.ReturnDate
+		}
+		if parseErr := validateFlightPageRows(rawFlights, flights, rowOrigin, rowDestination, rowDate); parseErr != nil {
+			return &models.FlightSearchResult{Error: parseErr.Error()}, parseErr
+		}
+	}
 
 	// Google returned flight entries but the positional parser decoded none of
 	// them — the array shape rotated. That is a parser failure, not a route with
@@ -799,6 +822,10 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	if perr := parseFailureIfAllDropped(len(flights), len(rawFlights)); perr != nil {
 		slog.Debug("google flights: all entries unparseable", "entries", len(rawFlights))
 		return &models.FlightSearchResult{Error: perr.Error()}, perr
+	}
+	flights = filterFlightPageResults(flights, opts)
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") && opts.ReturnDate != "" && len(opts.pageOutbound) == 0 && len(flights) > 0 {
+		return pairedGooglePageRoundTrip(ctx, client, origin, destination, date, opts, flights)
 	}
 
 	// Add booking URLs. Prices are in the API's native currency (IP-based).
