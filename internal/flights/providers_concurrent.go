@@ -20,6 +20,9 @@ import (
 // concurrent execution race-free.
 
 func runKiwiProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceKiwi) {
+		return sourceSkipped(SourceKiwi, "Kiwi")
+	}
 	if !kiwiSearchEligible(client, opts) {
 		return providerOutcome{status: models.ProviderStatus{
 			ID:      "kiwi",
@@ -48,6 +51,9 @@ func runKiwiProvider(ctx context.Context, client *batchexec.Client, origin, dest
 }
 
 func runSkiplaggedProvider(ctx context.Context, client *batchexec.Client, origin, destination, date string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceSkiplagged) {
+		return sourceSkipped(SourceSkiplagged, "Skiplagged")
+	}
 	// The round-trip composer suppresses the one-way Skiplagged leg searches
 	// because it queries Skiplagged once as a native round-trip instead (see
 	// disableSkiplaggedOneWay). Report a transparent skip rather than a silent
@@ -93,6 +99,9 @@ func runSkiplaggedProvider(ctx context.Context, client *batchexec.Client, origin
 }
 
 func runRyanairProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceRyanair) {
+		return sourceSkipped(SourceRyanair, "Ryanair")
+	}
 	if !ryanairSearchEligible(client, opts) {
 		return providerOutcome{status: models.ProviderStatus{
 			ID:      "ryanair",
@@ -121,6 +130,9 @@ func runRyanairProvider(ctx context.Context, client *batchexec.Client, origin, d
 }
 
 func runWizzairProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceWizzair) {
+		return sourceSkipped(SourceWizzair, "Wizz Air")
+	}
 	if !wizzairSearchEligible(client, opts) {
 		return providerOutcome{status: models.ProviderStatus{
 			ID:      "wizzair",
@@ -146,6 +158,9 @@ func runWizzairProvider(ctx context.Context, client *batchexec.Client, origin, d
 }
 
 func runTransaviaProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceTransavia) {
+		return sourceSkipped(SourceTransavia, "Transavia")
+	}
 	if !transaviaSearchEligible(client, opts) {
 		fixHint := "search one-way; drop the alliance/airline filter"
 		reason := "options not supported by Transavia direct (round-trip / alliance filter / non-HV/TO airline filter)"
@@ -180,6 +195,9 @@ func runTransaviaProvider(ctx context.Context, client *batchexec.Client, origin,
 }
 
 func runEasyjetProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceEasyjet) {
+		return sourceSkipped(SourceEasyjet, "easyJet")
+	}
 	if !easyjetSearchEligible(client, opts) {
 		fixHint := "search one-way economy; drop the alliance/airline filter"
 		reason := "options not supported by easyJet direct (round-trip / non-economy cabin / alliance filter / non-U2 airline filter)"
@@ -217,6 +235,9 @@ func runEasyjetProvider(ctx context.Context, client *batchexec.Client, origin, d
 }
 
 func runVuelingProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceVueling) {
+		return sourceSkipped(SourceVueling, "Vueling")
+	}
 	if !vuelingSearchEligible(client, opts) {
 		fixHint := "search one-way economy; drop the alliance/airline filter"
 		reason := "options not supported by Vueling direct (round-trip / non-economy cabin / alliance filter / non-VY airline filter)"
@@ -254,6 +275,9 @@ func runVuelingProvider(ctx context.Context, client *batchexec.Client, origin, d
 }
 
 func runNorwegianProvider(ctx context.Context, client *batchexec.Client, origin, destination, date, currency string, opts SearchOptions) providerOutcome {
+	if !opts.sourceAllowed(SourceNorwegian) {
+		return sourceSkipped(SourceNorwegian, "Norwegian")
+	}
 	if !norwegianSearchEligible(client, opts) {
 		fixHint := "search one-way economy; drop the alliance/airline filter"
 		reason := "options not supported by Norwegian direct (round-trip / non-economy cabin / alliance filter / non-DY airline filter)"

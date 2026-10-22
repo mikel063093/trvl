@@ -81,8 +81,8 @@ func TestGoogleRefusalWait(t *testing.T) {
 	if got := googleRefusalWait(429, "30", nil, now); got != 30*time.Second {
 		t.Fatalf("429 Retry-After 30 = %s", got)
 	}
-	if got := googleRefusalWait(429, "999999", nil, now); got != googleRefusalCap {
-		t.Fatalf("huge Retry-After = %s, want cap %s", got, googleRefusalCap)
+	if got := googleRefusalWait(429, "999999", nil, now); got != 999999*time.Second {
+		t.Fatalf("Retry-After must not be shortened: %s", got)
 	}
 	past := now.Add(-time.Hour).Format(time.RFC1123)
 	if got := googleRefusalWait(429, past, nil, now); got != googleRefusalFloor {
@@ -134,8 +134,8 @@ func TestGoogle429OneUpstreamCall(t *testing.T) {
 
 	deadline := readRefusalDeadline(t, dir)
 	until := time.Until(deadline)
-	if until < 14*time.Minute || until > 16*time.Minute {
-		t.Fatalf("cooldown remaining = %s, want about 15m (capped hint)", until)
+	if until < 999998*time.Second || until > 1000000*time.Second {
+		t.Fatalf("cooldown remaining = %s, want the full 999999s hint", until)
 	}
 }
 

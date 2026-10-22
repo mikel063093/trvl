@@ -24,7 +24,7 @@ import (
 // A disabled or ineligible provider yields no results and no status, leaving the
 // composition-only behaviour byte-unchanged.
 func searchNativeRoundTrip(ctx context.Context, client *batchexec.Client, origin, destination, date, returnDate string, opts SearchOptions, target string) ([]models.FlightResult, []models.ProviderStatus) {
-	if !skiplaggedSearchEligible(client, opts) {
+	if !opts.sourceAllowed(SourceSkiplagged) || !skiplaggedSearchEligible(client, opts) {
 		return nil, nil
 	}
 
@@ -217,8 +217,8 @@ func searchKiwiNativeRoundTrip(ctx context.Context, client *batchexec.Client, or
 	// genuine filter limits and the shared-client guard, but allow round-trips.
 	probe := opts
 	probe.ReturnDate = ""
-	if !kiwiSearchEligible(client, probe) {
-		return nil, nil // unsupported filters / non-shared client — composition covers it
+	if !opts.sourceAllowed(SourceKiwi) || !kiwiSearchEligible(client, probe) {
+		return nil, nil // not requested / unsupported filters / non-shared client — composition covers it
 	}
 
 	rtOpts := opts
@@ -273,7 +273,7 @@ func searchAFKLMNativeRoundTrip(ctx context.Context, origin, destination, date, 
 
 	// Fanout suppression (set by SearchMultiAirport on sub-searches): skip AFKLM
 	// so its 1-QPS/100-req-day quota is spent at most once per logical search.
-	if opts.suppressAFKLM {
+	if opts.suppressAFKLM || !opts.sourceAllowed(SourceAFKLM) {
 		return nil, nil
 	}
 
@@ -526,7 +526,14 @@ func enrichNativeReturnLegs(native, inbound []models.FlightResult, n int) ([]mod
 		// (AFKLM always returns both legs for round-trips.)
 		isNativeOutboundShell := false
 		for _, w := range f.Warnings {
-			if w == googleNativeRoundTripWarning || w == kiwiNativeRoundTripWarning {
+			// An independently searched one-way cannot establish which return is
+			// included in a Google native total. Page searches now pin the
+			// outbound and fetch the actual paired return quote instead.
+			if w == googleNativeRoundTripWarning {
+				isNativeOutboundShell = false
+				break
+			}
+			if w == kiwiNativeRoundTripWarning {
 				isNativeOutboundShell = true
 				break
 			}
@@ -586,7 +593,7 @@ func attachReturnLeg(f, ret models.FlightResult) models.FlightResult {
 	warnings = append(warnings, warn)
 	for _, w := range f.Warnings {
 		// A real return is now shown, so the booking-time-only note is misleading.
-		if w == googleNativeRoundTripWarning || w == kiwiNativeRoundTripWarning {
+		if w == kiwiNativeRoundTripWarning {
 			continue
 		}
 		warnings = append(warnings, w)

@@ -7,6 +7,9 @@ import (
 	"github.com/MikkoParkkola/trvl/internal/models"
 )
 
+// Google page round trips now use a selected-outbound return quote.
+// These legacy display-enrichment tests cover Kiwi indicative shells only;
+// consumers requiring a confirmed itinerary must reject their warning.
 // nativeRTFare builds an outbound-only native round-trip fare shell
 // (post-tagNativeRoundTrip for the "return selected at booking" case).
 // Per #468: outbound-only shells are NOT tagged FareRoundTrip (empty FareType)
@@ -45,7 +48,7 @@ func inboundOneWay(price float64, airline, departTime string) models.FlightResul
 }
 
 func TestEnrichNativeReturnLegs_AttachesRealReturnLeg(t *testing.T) {
-	native := []models.FlightResult{nativeRTFare(280, googleNativeRoundTripWarning)}
+	native := []models.FlightResult{nativeRTFare(280, kiwiNativeRoundTripWarning)}
 	inbound := []models.FlightResult{inboundOneWay(60, "Ryanair", "2026-07-22T18:40")}
 
 	out, status := enrichNativeReturnLegs(native, inbound, roundTripNativeReturnCandidates)
@@ -73,7 +76,7 @@ func TestEnrichNativeReturnLegs_AttachesRealReturnLeg(t *testing.T) {
 	}
 	// Booking-time-only warning dropped; honest enrichment warning present.
 	for _, w := range f.Warnings {
-		if w == googleNativeRoundTripWarning {
+		if w == kiwiNativeRoundTripWarning {
 			t.Errorf("booking-time warning must be dropped once a real return is shown: %v", f.Warnings)
 		}
 	}
@@ -91,7 +94,7 @@ func TestEnrichNativeReturnLegs_AttachesRealReturnLeg(t *testing.T) {
 func TestEnrichNativeReturnLegs_InboundLegFilterable(t *testing.T) {
 	// The whole point: a per-leg return-condition filter must have real detail to
 	// act on. Assert the attached inbound leg carries carrier + departure time.
-	native := []models.FlightResult{nativeRTFare(280, googleNativeRoundTripWarning)}
+	native := []models.FlightResult{nativeRTFare(280, kiwiNativeRoundTripWarning)}
 	inbound := []models.FlightResult{inboundOneWay(60, "Ryanair", "2026-07-22T18:40")}
 
 	out, _ := enrichNativeReturnLegs(native, inbound, roundTripNativeReturnCandidates)
@@ -111,11 +114,11 @@ func TestEnrichNativeReturnLegs_TopNCapEnforcedAndReported(t *testing.T) {
 	// 5 outbound-only native fares, only roundTripNativeReturnCandidates (3) may
 	// be enriched. The cap must be enforced AND reported, never silent.
 	native := []models.FlightResult{
-		nativeRTFare(200, googleNativeRoundTripWarning),
-		nativeRTFare(210, googleNativeRoundTripWarning),
-		nativeRTFare(220, googleNativeRoundTripWarning),
-		nativeRTFare(230, googleNativeRoundTripWarning),
-		nativeRTFare(240, googleNativeRoundTripWarning),
+		nativeRTFare(200, kiwiNativeRoundTripWarning),
+		nativeRTFare(210, kiwiNativeRoundTripWarning),
+		nativeRTFare(220, kiwiNativeRoundTripWarning),
+		nativeRTFare(230, kiwiNativeRoundTripWarning),
+		nativeRTFare(240, kiwiNativeRoundTripWarning),
 	}
 	inbound := []models.FlightResult{
 		inboundOneWay(50, "A", "2026-07-22T06:00"),
@@ -171,14 +174,14 @@ func TestEnrichNativeReturnLegs_NoInboundIsNoOp(t *testing.T) {
 	// A provider that genuinely cannot price the return per-leg leaves no inbound
 	// one-way to reuse: the native fare must be returned unchanged (honest), with
 	// a no-hit status — never a fabricated return.
-	native := []models.FlightResult{nativeRTFare(280, googleNativeRoundTripWarning)}
+	native := []models.FlightResult{nativeRTFare(280, kiwiNativeRoundTripWarning)}
 
 	out, status := enrichNativeReturnLegs(native, nil, roundTripNativeReturnCandidates)
 
 	if len(out[0].Legs) != 1 {
 		t.Errorf("legs: got %d, want 1 (unchanged, no fabricated return)", len(out[0].Legs))
 	}
-	if out[0].Warnings[0] != googleNativeRoundTripWarning {
+	if out[0].Warnings[0] != kiwiNativeRoundTripWarning {
 		t.Errorf("original booking-time warning must be preserved when no return found: %v", out[0].Warnings)
 	}
 	if status.Status != models.StatusCheckedNoHit {
@@ -190,7 +193,7 @@ func TestEnrichNativeReturnLegs_LeavesTwoLeggedAndOneWayUntouched(t *testing.T) 
 	// A native fare that already carries both halves, and a one-way (no FareType)
 	// result, must both be left untouched — only outbound-only native fares are
 	// enriched.
-	twoLegged := nativeRTFare(300, googleNativeRoundTripWarning)
+	twoLegged := nativeRTFare(300, kiwiNativeRoundTripWarning)
 	twoLegged.Legs = append(twoLegged.Legs, models.FlightLeg{
 		DepartureAirport: models.AirportInfo{Code: "BCN"},
 		ArrivalAirport:   models.AirportInfo{Code: "HEL"},
@@ -216,7 +219,7 @@ func TestEnrichNativeReturnLegs_LeavesTwoLeggedAndOneWayUntouched(t *testing.T) 
 }
 
 func TestEnrichNativeReturnLegs_DoesNotMutateInboundSource(t *testing.T) {
-	native := []models.FlightResult{nativeRTFare(280, googleNativeRoundTripWarning)}
+	native := []models.FlightResult{nativeRTFare(280, kiwiNativeRoundTripWarning)}
 	inbound := []models.FlightResult{inboundOneWay(60, "Ryanair", "2026-07-22T18:40")}
 
 	_, _ = enrichNativeReturnLegs(native, inbound, roundTripNativeReturnCandidates)

@@ -48,18 +48,16 @@ func TestFlightStealth_DefaultOff(t *testing.T) {
 	}
 }
 
-// TestFlightStealth_RequestedUnauthorized proves Stealth=true for the Google host
-// when the allowlist is empty runs the normal path and emits the refusal log —
-// proving the flag is genuinely plumbed into the fetch (the prior failure was a
-// flag that never reached the fetch path).
+// The search-page transport always uses ordinary HTTP, regardless of the old
+// RPC stealth option or allowlist.
 func TestFlightStealth_RequestedUnauthorized(t *testing.T) {
 	t.Setenv(stealth.AllowlistEnv, "") // refuse by default
 	buf := captureSlog(t)
 
 	runGoogleLeg(t, SearchOptions{Stealth: true})
 
-	if !strings.Contains(buf.String(), "stealth not authorized for host www.google.com") {
-		t.Errorf("expected refusal log for unauthorized host; got: %q", buf.String())
+	if strings.Contains(buf.String(), "stealth") {
+		t.Errorf("page transport consulted stealth; got: %q", buf.String())
 	}
 }
 

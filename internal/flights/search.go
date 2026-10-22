@@ -38,12 +38,15 @@ func DefaultClient() *batchexec.Client {
 
 // SearchOptions configures a flight search.
 type SearchOptions struct {
-	ReturnDate string            // Return date for round-trip (YYYY-MM-DD); empty = one-way
-	CabinClass models.CabinClass // Cabin class (default: Economy)
-	MaxStops   models.MaxStops   // Maximum stops filter
-	SortBy     models.SortBy     // Result sort order
-	Airlines   []string          // Restrict to these airline IATA codes
-	Adults     int               // Number of adult passengers (default: 1)
+	// pageOutbound pins a real outbound on the Google search page so its next
+	// board prices matching returns. Internal to the native round-trip lookup.
+	pageOutbound []models.FlightLeg
+	ReturnDate   string            // Return date for round-trip (YYYY-MM-DD); empty = one-way
+	CabinClass   models.CabinClass // Cabin class (default: Economy)
+	MaxStops     models.MaxStops   // Maximum stops filter
+	SortBy       models.SortBy     // Result sort order
+	Airlines     []string          // Restrict to these airline IATA codes
+	Adults       int               // Number of adult passengers (default: 1)
 
 	// DepartureFlexDays / ReturnFlexDays enable Kiwi's flexible-date search
 	// (cheapest within +/- N days). Range 0-3; values are clamped. 0 = exact.
@@ -73,6 +76,21 @@ type SearchOptions struct {
 	// Client-side post-filters (applied after server response).
 	RequireCheckedBag bool // Only show flights with ≥1 free checked bag
 	FirstResult       bool // Return only the first flight with Price > 0 after sorting
+
+	// Sources limits the secondary providers a search queries to these ids (see
+	// the Source* constants; use NormalizeSources). Empty means every provider,
+	// the default. Google Flights is always queried: its answer fixes the
+	// currency the others are priced in. Each provider left out costs no
+	// request, which matters to a caller that shares an IP with other clients of
+	// the same providers.
+	Sources []string
+
+	// NoComposedFares skips the outbound one-way search and the pairing of two
+	// one-way tickets into a round trip (the split-ticket fares). Native
+	// round-trip fares are still searched, and the inbound one-way search still
+	// runs because it gives those fares their return leg. A caller that drops
+	// composed fares saves a third of the round-trip requests.
+	NoComposedFares bool
 
 	// NoHacks opts out of the auto-composed travel-hacks savings engine. The
 	// engine is ON by default: a normal search also surfaces the single best
@@ -165,7 +183,7 @@ func SearchFlights(ctx context.Context, origin, destination, date string, opts S
 // AFKLM-suppressed and an AFKLM-included request cannot collide on one cache
 // entry and serve each other's results.
 func flightSearchKey(origin, destination, date string, opts SearchOptions) string {
-	return fmt.Sprintf("flight|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%v|%v|%v|%s|%s|%s|%v",
+	return fmt.Sprintf("flight|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%v|%v|%v|%s|%s|%s|%v|%s|%v|%v",
 		origin, destination, date, opts.ReturnDate,
 		opts.CabinClass, opts.MaxStops, opts.SortBy, opts.Adults,
 		opts.MaxPrice, opts.MaxDuration, opts.CarryOnBags, opts.CheckedBags,
@@ -173,6 +191,9 @@ func flightSearchKey(origin, destination, date string, opts SearchOptions) strin
 		opts.ExcludeBasic, opts.LessEmissions, opts.RequireCheckedBag,
 		canonicalStringSlice(opts.Alliances), opts.DepartAfter, opts.DepartBefore,
 		opts.suppressAFKLM,
+		// A search with other sources, or with the savings pass or composed fares
+		// left out, returns different flights: it must not share a cache entry.
+		canonicalStringSlice(opts.Sources), opts.NoComposedFares, opts.NoHacks,
 	)
 }
 
@@ -713,9 +734,7 @@ func googleUpstreamStatusError(status int) error {
 }
 
 func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client, origin, destination, date string, opts SearchOptions) (*models.FlightSearchResult, error) {
-	filters := buildFilters(origin, destination, date, opts)
-
-	encoded, err := batchexec.EncodeFlightFilters(filters)
+	encoded, err := flightPageToken(origin, destination, date, opts)
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("encode filters: %v", err),
@@ -723,7 +742,7 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	gl := CurrencyToGL(opts.Currency)
-	status, body, err := client.SearchFlightsGLStealth(ctx, encoded, gl, opts.Stealth)
+	status, body, err := client.SearchFlightsPage(ctx, encoded, gl, opts.Currency)
 	if err != nil {
 		reqErr := googleRequestError(err)
 		return &models.FlightSearchResult{Error: reqErr.Error()}, reqErr
@@ -743,7 +762,17 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 		}, fmt.Errorf("unexpected status %d", status)
 	}
 
-	inner, err := batchexec.DecodeFlightResponse(body)
+	if batchexec.PageRefusal(body) {
+		rlErr := googleNonFlightError(body)
+		return &models.FlightSearchResult{Error: rlErr.Error()}, rlErr
+	}
+	// JSON refusals remain classified precisely; successful searches arrive as HTML.
+	var inner any
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") {
+		inner, err = decodeFlightPage(body)
+	} else {
+		inner, err = batchexec.DecodeFlightResponse(body)
+	}
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("decode response: %v", err),
@@ -766,6 +795,9 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	rawFlights, err := batchexec.ExtractFlightData(inner)
+	if err != nil && strings.HasPrefix(strings.TrimSpace(string(body)), "<") && emptyFlightPage(inner) {
+		err = nil
+	}
 	if err != nil {
 		return &models.FlightSearchResult{
 			Error: fmt.Sprintf("extract flights: %v", err),
@@ -773,6 +805,15 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	}
 
 	flights := parseFlights(rawFlights)
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") {
+		rowOrigin, rowDestination, rowDate := origin, destination, date
+		if len(opts.pageOutbound) > 0 {
+			rowOrigin, rowDestination, rowDate = destination, origin, opts.ReturnDate
+		}
+		if parseErr := validateFlightPageRows(rawFlights, flights, rowOrigin, rowDestination, rowDate); parseErr != nil {
+			return &models.FlightSearchResult{Error: parseErr.Error()}, parseErr
+		}
+	}
 
 	// Google returned flight entries but the positional parser decoded none of
 	// them — the array shape rotated. That is a parser failure, not a route with
@@ -781,6 +822,10 @@ func searchGoogleFlightsWithClient(ctx context.Context, client *batchexec.Client
 	if perr := parseFailureIfAllDropped(len(flights), len(rawFlights)); perr != nil {
 		slog.Debug("google flights: all entries unparseable", "entries", len(rawFlights))
 		return &models.FlightSearchResult{Error: perr.Error()}, perr
+	}
+	flights = filterFlightPageResults(flights, opts)
+	if strings.HasPrefix(strings.TrimSpace(string(body)), "<") && opts.ReturnDate != "" && len(opts.pageOutbound) == 0 && len(flights) > 0 {
+		return pairedGooglePageRoundTrip(ctx, client, origin, destination, date, opts, flights)
 	}
 
 	// Add booking URLs. Prices are in the API's native currency (IP-based).
